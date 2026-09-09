@@ -6,8 +6,6 @@
 сразу получить результат, и **Python-пакет** — для случаев, когда нужна
 спутниковая температура воды и калибровка.
 
-[![tests](https://github.com/USER/sorbulak-evap/actions/workflows/tests.yml/badge.svg)](https://github.com/USER/sorbulak-evap/actions/workflows/tests.yml)
-[![deploy](https://github.com/USER/sorbulak-evap/actions/workflows/pages.yml/badge.svg)](https://github.com/USER/sorbulak-evap/actions/workflows/pages.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **→ [Открыть приложение](https://github.com/AigulBekbayeva/evap_web/)**

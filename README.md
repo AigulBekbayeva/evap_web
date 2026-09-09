@@ -10,7 +10,7 @@
 [![deploy](https://github.com/USER/sorbulak-evap/actions/workflows/pages.yml/badge.svg)](https://github.com/USER/sorbulak-evap/actions/workflows/pages.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**→ [Открыть приложение](https://USER.github.io/sorbulak-evap/)**
+**→ [Открыть приложение](https://github.com/AigulBekbayeva/evap_web/)**
 
 ---
 
@@ -63,7 +63,7 @@
 из данных вместо того, чтобы задавать её на глаз.
 
 ```bash
-git clone https://github.com/USER/sorbulak-evap
+git clone https://github.com/AigulBekbayeva/evap_web
 cd sorbulak-evap
 pip install -e ".[geo,dev]"
 
@@ -308,3 +308,4 @@ python -m http.server -d web 8000
 ## Лицензия
 
 MIT
+https://www.linkedin.com/in/aigulbekbayeva/

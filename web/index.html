@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Испарение с водной поверхности — расчёт по контуру</title>
-<meta name="description" content="Нарисуйте контур озера или водохранилища на карте и получите расчёт испарения по годам и месяцам. Данные ERA5 через Open-Meteo, метод Пенмана.">
+<title>Open-Water Evaporation — draw a lake, get the numbers</title>
+<meta name="description" content="Draw the outline of a lake or reservoir on a map and get evaporation by year and month. ERA5 reanalysis via Open-Meteo, Penman method, runs entirely in your browser.">
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
@@ -16,27 +16,27 @@
   <div id="mapWrap">
     <div id="map"></div>
     <div class="hint" id="hint">
-      Нарисуйте контур водоёма — иконка многоугольника слева
+      Draw the outline of your water body — polygon tool on the left
     </div>
   </div>
 
   <div id="side">
-    <h1>Испарение с водной поверхности</h1>
+    <h1>Open-Water Evaporation</h1>
     <div class="tagline">
-      Метод Пенмана · ERA5 через Open-Meteo · расчёт в браузере
+      Penman method · ERA5 via Open-Meteo · computed in your browser
     </div>
 
-    <!-- ---------- шаг 1 ---------- -->
+    <!-- ---------- step 1 ---------- -->
     <div class="step active" id="step1">
-      <div class="step-head"><span class="step-num">1</span> Контур водоёма</div>
+      <div class="step-head"><span class="step-num">1</span> Water body outline</div>
       <div class="step-body">
-        Обведите акваторию инструментом многоугольника на карте. Спутниковая
-        подложка включена по умолчанию — по ней видно урез воды. Обводите
-        средний многолетний уровень, а не разлив конкретного года.
+        Trace the water surface with the polygon tool. Satellite imagery is the
+        default basemap, so the shoreline is visible. Outline the long-term
+        average water level rather than the extent of one particular year.
       </div>
       <div class="row">
         <label for="fileInput" style="cursor:pointer;color:var(--accent)">
-          или загрузить GeoJSON
+          or upload a GeoJSON file
         </label>
         <input type="file" id="fileInput" accept=".geojson,.json"
                style="display:none">
@@ -45,38 +45,38 @@
       <div class="note warn" id="cellWarn" style="display:none"></div>
     </div>
 
-    <!-- ---------- шаг 2 ---------- -->
+    <!-- ---------- step 2 ---------- -->
     <div class="step" id="step2">
-      <div class="step-head"><span class="step-num">2</span> Параметры</div>
+      <div class="step-head"><span class="step-num">2</span> Parameters</div>
 
       <div class="row">
-        <label style="flex:1">Средняя глубина, м
+        <label style="flex:1">Mean depth, m
           <input type="number" id="depth" value="8" min="0.5" max="200"
                  step="0.5">
         </label>
       </div>
       <div class="step-body">
-        Определяет тепловую инерцию. Годовая сумма испарения к ней
-        малочувствительна, а сезонный ход — очень: глубокий водоём даёт
-        сдвинутый и срезанный летний пик.
+        Sets the thermal inertia. The annual total is fairly insensitive to it;
+        the seasonal cycle is not. A deeper water body shifts the summer peak
+        later and flattens it.
       </div>
 
       <div class="row">
-        <label style="flex:1">С года
+        <label style="flex:1">From year
           <input type="number" id="yearFrom" value="2014" min="1950"
                  max="2025">
         </label>
-        <label style="flex:1">По год
+        <label style="flex:1">To year
           <input type="number" id="yearTo" value="2024" min="1950" max="2025">
         </label>
       </div>
       <div class="step-body">
-        Дополнительно загружается год перед началом периода — он уходит на
-        раскрутку модели температуры воды и в результат не попадает.
+        One extra year before the start is downloaded to spin up the water
+        temperature model. It is discarded and never appears in the results.
       </div>
 
       <button class="primary" id="runBtn" disabled
-              style="margin-top:12px">Рассчитать</button>
+              style="margin-top:12px">Calculate</button>
 
       <div id="progress">
         <div class="pbar"><div></div></div>
@@ -84,82 +84,107 @@
       </div>
     </div>
 
-    <!-- ---------- результаты ---------- -->
+    <!-- ---------- results ---------- -->
     <div id="results" style="display:none">
 
-      <h2 id="statsHead">Сводка</h2>
+      <h2 id="statsHead">Summary</h2>
       <div class="stats" id="stats"></div>
       <div class="note" id="resultNote"></div>
 
-      <h2>Испарение по годам и месяцам, мм</h2>
+      <h2>Evaporation by year and month, mm
+        <button class="png" data-png="heatmap" title="Download PNG">PNG</button>
+      </h2>
       <div class="box">
         <table class="heat" id="heatmap"></table>
         <div style="display:flex;align-items:center;margin-top:8px;font-size:10px"
              id="heatLegend"></div>
       </div>
 
-      <h2>Годовой ход</h2>
+      <h2>Seasonal cycle
+        <button class="png" data-png="clim" title="Download PNG">PNG</button>
+      </h2>
       <div class="box"><canvas id="climChart"></canvas></div>
 
-      <h2>Межгодовая динамика</h2>
+      <h2>Year to year
+        <button class="png" data-png="ann" title="Download PNG">PNG</button>
+      </h2>
       <div class="box"><canvas id="annChart"></canvas></div>
       <div class="note">
-        Кликните по столбцу, чтобы посмотреть отдельный год. Повторный клик
-        возвращает осреднение за весь период.
+        Click a bar to inspect a single year. Click it again to return to the
+        multi-year average.
       </div>
 
-      <h2>Временной ряд</h2>
+      <h2>Daily series
+        <button class="png" data-png="ts" title="Download PNG">PNG</button>
+      </h2>
       <div class="tabs">
-        <div class="tab on" data-series="E">Испарение</div>
-        <div class="tab" data-series="T">Температура</div>
+        <div class="tab on" data-series="E">Evaporation</div>
+        <div class="tab" data-series="T">Temperature</div>
       </div>
       <div class="box"><canvas id="tsChart"></canvas></div>
 
-      <h2>Выгрузка</h2>
-      <div class="row">
-        <button class="small" id="csvDaily">Суточный CSV</button>
-        <button class="small" id="csvMonthly">Месячный CSV</button>
-        <button class="small" id="csvGeo">Контур GeoJSON</button>
+      <h2>Downloads</h2>
+      <div class="row" style="flex-wrap:wrap">
+        <button class="small" id="csvDaily">Daily CSV</button>
+        <button class="small" id="csvMonthly">Monthly CSV</button>
+        <button class="small" id="csvGeo">Outline GeoJSON</button>
+      </div>
+      <div class="row" style="flex-wrap:wrap;margin-top:6px">
+        <button class="small" id="pngAll">All charts as one PNG</button>
+      </div>
+      <div class="note">
+        Charts are exported with the title, area, coordinates and period already
+        on them, so an image can go straight into a report or a slide. Output is
+        rendered at double resolution.
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <label style="flex:1">Water body name for chart captions
+          <input type="text" id="objName"
+                 placeholder="e.g. Shardara Reservoir">
+        </label>
       </div>
     </div>
 
-    <!-- ---------- о методе ---------- -->
-    <h2>Что здесь считается</h2>
+    <!-- ---------- method ---------- -->
+    <h2>What is being computed</h2>
     <div class="note">
-      Испарение со свободной водной поверхности по <b>Пенману</b>: сумма
-      радиационной и адвективной составляющих. Метеорология — реанализ ERA5-Land
-      (9 км) через Open-Meteo Archive API.
+      Open-water evaporation by the <b>Penman</b> method: the sum of a radiative
+      and an aerodynamic term. Meteorology comes from the ERA5 reanalysis
+      (ECMWF) through the Open-Meteo Archive API.
     </div>
     <div class="note">
-      Температура воды <b>моделируется</b>: интегрируется тепловой баланс толщи
-      с заданной вами глубиной. Это принципиально лучше, чем приравнять
-      температуру воды к температуре воздуха — воспроизводится тепловая инерция,
-      и теплозапас работает физически осмысленно.
+      Water temperature is <b>modelled</b>, not measured: the heat balance of
+      the water column is integrated using the depth you provide. This is far
+      better than assuming water temperature equals air temperature — thermal
+      inertia is reproduced, and heat storage enters the calculation in a
+      physically meaningful way.
     </div>
     <div class="note warn">
-      <b>Проверить результат нечем.</b> Наземных измерений нет, спутниковая
-      температура воды в браузерной версии недоступна, поэтому глубина остаётся
-      свободным параметром. Сравнивать годы и месяцы между собой можно смело —
-      систематическая ошибка одинакова для всех. К абсолютным значениям
-      относитесь как к оценке порядка величины. Кому нужна точность:
-      Python-версия проекта восстанавливает глубину по спутниковой температуре
-      Landsat.
+      <b>There is nothing to validate against.</b> Depth remains a free
+      parameter and no ground measurements are involved. Comparing years and
+      months against each other is safe — the systematic error is the same for
+      all of them. Treat absolute values as an order-of-magnitude estimate. If
+      you need accuracy, the Python version of this project recovers depth from
+      satellite water-surface temperature (Landsat, MODIS).
     </div>
     <div class="note">
-      Нисходящее длинноволновое излучение Open-Meteo не отдаёт, оно оценивается
-      по формуле Брунта через температуру, влажность и облачность — точность
-      около 10 %.
+      Downwelling longwave radiation is not served by Open-Meteo, so it is
+      estimated from temperature, humidity and cloud cover using the Brunt
+      formula — roughly 10 % accuracy.
     </div>
 
     <footer>
-      Исходный код и Python-версия:
-      <a href="https://github.com/USER/sorbulak-evap" target="_blank"
-         rel="noopener">github.com/USER/sorbulak-evap</a><br>
-      Данные: <a href="https://open-meteo.com" target="_blank"
-                 rel="noopener">Open-Meteo</a> (ERA5, ECMWF) ·
-      подложки Esri, OpenStreetMap, CARTO<br>
-      Лицензия MIT. Расчёт выполняется полностью в вашем браузере — ни контур,
-      ни результаты никуда не отправляются.
+      Developed by <b>Aigul Bekbayeva</b> ·
+      <a href="https://www.linkedin.com/in/aigulbekbayeva/" target="_blank" rel="noopener">LinkedIn</a><br>
+      Source code and Python version:
+      <a href="https://github.com/AigulBekbayeva/evap_web" target="_blank"
+         rel="noopener">github.com/AigulBekbayeva/evap_web</a><br>
+      Data: <a href="https://open-meteo.com" target="_blank"
+               rel="noopener">Open-Meteo</a> (ERA5, ECMWF) ·
+      basemaps by Esri, OpenStreetMap, CARTO<br>
+      MIT licence. Everything runs in your browser — neither the outline nor
+      the results are sent anywhere.
     </footer>
   </div>
 </div>

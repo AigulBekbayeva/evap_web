@@ -7,12 +7,13 @@ import {
   computeEvaporation, aggregateMonthly, aggregateAnnual, climatology,
   linearTrend, toCSV, monthlyToCSV,
 } from './compute.js';
+import { exportChart, exportHeatmap, exportAll, metaFor } from './export.js';
 
-const MONTHS = ['янв', 'фев', 'мар', 'апр', 'май', 'июн',
-                'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const state = {
-  layer: null, area: null, centroid: null,
+  layer: null, area: null, centroid: null, name: '',
   rows: null, monthly: null, annual: null, clim: null,
   selectedYear: null,
 };
@@ -42,8 +43,8 @@ const labels = L.tileLayer(
   { attribution: '&copy; CARTO', maxZoom: 19, pane: 'shadowPane' }).addTo(map);
 
 L.control.layers(
-  { 'Спутник': baseSat, 'Схема OSM': baseOsm, 'Тёмная': baseDark },
-  { 'Подписи': labels },
+  { 'Satellite': baseSat, 'OSM map': baseOsm, 'Dark': baseDark },
+  { 'Labels': labels },
   { collapsed: false, position: 'topright' }).addTo(map);
 
 const drawn = new L.FeatureGroup().addTo(map);
@@ -125,8 +126,8 @@ function onShapeReady(layer) {
   const pts = outerRing(layer.getLatLngs());
 
   if (!pts || pts.length < 3) {
-    alert('Не удалось прочитать контур: нужен замкнутый многоугольник ' +
-          'минимум из трёх точек.');
+    alert('Could not read the outline: a closed polygon of at least three ' +
+          'points is required.');
     return;
   }
   state.layer = layer;
@@ -136,15 +137,15 @@ function onShapeReady(layer) {
   if (!Number.isFinite(state.centroid.lat) ||
       !Number.isFinite(state.centroid.lng) ||
       !Number.isFinite(state.area) || state.area <= 0) {
-    alert('Контур дал некорректные координаты. Нарисуйте его заново.');
+    alert('The outline produced invalid coordinates. Please draw it again.');
     state.layer = null;
     updateSteps();
     return;
   }
 
   document.getElementById('shapeInfo').innerHTML =
-    `Площадь <b>${state.area.toFixed(1)} км²</b>, центр ` +
-    `${state.centroid.lat.toFixed(4)}° с.ш., ${state.centroid.lng.toFixed(4)}° в.д.`;
+    `Area <b>${state.area.toFixed(1)} km²</b>, centre ` +
+    `${state.centroid.lat.toFixed(4)}°N, ${state.centroid.lng.toFixed(4)}°E`;
 
   document.getElementById('hint').classList.add('hide');
   updateSteps();
@@ -165,11 +166,12 @@ function checkEra5Cell() {
   if (cells < 1.5) {
     el.style.display = 'block';
     el.innerHTML =
-      `<b>Водоём занимает ~${cells.toFixed(1)} ячейки ERA5-Land (9 км).</b> ` +
-      `Метеоданные будут частично или полностью характеризовать окружающую ` +
-      `сушу, где воздух суше и теплее. Испарение окажется завышенным — ` +
-      `насколько именно, без наземных измерений сказать нельзя. ` +
-      `Сравнивать годы между собой можно, абсолютные значения — с осторожностью.`;
+      `<b>This water body covers about ${cells.toFixed(1)} of an ERA5-Land ` +
+      `cell (9 km).</b> The meteorology will partly or entirely describe the ` +
+      `surrounding land, where air is drier and warmer, so evaporation will ` +
+      `come out too high. By how much cannot be said without ground ` +
+      `measurements. Comparing years against each other remains valid; treat ` +
+      `absolute values with caution.`;
   } else {
     el.style.display = 'none';
   }
@@ -189,13 +191,13 @@ document.getElementById('fileInput').addEventListener('change', ev => {
         style: { color: '#4fa3d1', weight: 2, fillOpacity: 0.15 },
       });
       const first = layer.getLayers()[0];
-      if (!first) throw new Error('в файле нет геометрий');
+      if (!first) throw new Error('the file contains no geometry');
 
       drawn.addLayer(first);
       map.fitBounds(first.getBounds(), { padding: [40, 40] });
       onShapeReady(first);
     } catch (err) {
-      alert(`Не удалось прочитать GeoJSON: ${err.message}`);
+      alert(`Could not read the GeoJSON: ${err.message}`);
     }
   };
   reader.readAsText(file);
@@ -215,8 +217,8 @@ async function run() {
   const y0 = parseInt(document.getElementById('yearFrom').value, 10);
   const y1 = parseInt(document.getElementById('yearTo').value, 10);
 
-  if (!(depth > 0.5)) { alert('Глубина должна быть больше 0.5 м'); return; }
-  if (y1 < y0) { alert('Конечный год раньше начального'); return; }
+  if (!(depth > 0.5)) { alert('Depth must be greater than 0.5 m'); return; }
+  if (y1 < y0) { alert('End year is earlier than start year'); return; }
 
   btn.disabled = true;
   prog.classList.add('show');
@@ -231,15 +233,15 @@ async function run() {
       });
 
     bar.style.width = '97%';
-    ptext.textContent = 'Расчёт испарения…';
+    ptext.textContent = 'Computing evaporation…';
     await new Promise(r => setTimeout(r, 30));   // дать браузеру перерисоваться
 
     const rows = computeEvaporation(met, depth, 365);
 
     if (!rows.length) {
       throw new Error(
-        'После вычета года на раскрутку модели данных не осталось. ' +
-        'Задайте период хотя бы в два года.');
+        'Nothing is left after the model spin-up year is removed. ' +
+        'Choose a period of at least two years.');
     }
 
     const bad = rows.filter(r => !Number.isFinite(r.ePenman)
@@ -247,10 +249,10 @@ async function run() {
     if (bad.length) {
       // Лучше остановиться здесь, чем отрисовать матрицу из NaN: ошибка
       // всплывёт в отрисовке и укажет на палитру, а не на данные.
-      console.error('Первые испорченные сутки:', bad.slice(0, 5));
+      console.error('First corrupted days:', bad.slice(0, 5));
       throw new Error(
-        `Расчёт дал некорректные значения для ${bad.length} суток ` +
-        `из ${rows.length}. Подробности в консоли браузера.`);
+        `The calculation produced invalid values for ${bad.length} of ` +
+        `${rows.length} days. See the browser console for details.`);
     }
 
     const annual = aggregateAnnual(rows);
@@ -258,9 +260,9 @@ async function run() {
       // aggregateAnnual отбрасывает годы короче 350 суток: их суммы
       // несопоставимы с полными. Если не осталось ни одного — считать нечего.
       throw new Error(
-        `Нет ни одного полного года: получено ${rows.length} суток после ` +
-        'раскрутки. Расширьте период — нужен минимум один календарный год ' +
-        'сверх года раскрутки.');
+        `No complete year available: ${rows.length} days remain after ` +
+        'spin-up. Widen the period — at least one full calendar year beyond ' +
+        'the spin-up year is required.');
     }
 
     state.rows = rows;
@@ -270,18 +272,22 @@ async function run() {
     state.selectedYear = null;
 
     bar.style.width = '100%';
-    ptext.textContent = `Готово: ${rows.length} суток, ` +
-                        `${state.annual.length} полных лет`;
+    ptext.textContent = `Done: ${rows.length} days, ` +
+                        `${state.annual.length} complete years`;
 
-    render();
+    // Контейнер обязан быть видимым ДО render(): Chart.js измеряет размеры
+    // при создании, и в скрытом блоке получает холст 0×0. На экране графики
+    // потом появятся (сработает resize), но canvas.width останется нулевым,
+    // и экспорт в PNG выдаст пустую картинку.
     document.getElementById('results').style.display = 'block';
+    render();
     setTimeout(() => prog.classList.remove('show'), 1500);
   } catch (err) {
-    ptext.textContent = `Ошибка: ${err.message}`;
+    ptext.textContent = `Error: ${err.message}`;
     // Полный стек — в консоль: сообщение в интерфейсе не показывает, где
     // именно сломалось, а при разборе проблемы это первое, что нужно.
-    console.error('Расчёт прерван:', err);
-    console.error('Состояние:', {
+    console.error('Calculation aborted:', err);
+    console.error('State:', {
       area: state.area, centroid: state.centroid,
       depth, yearFrom: y0, yearTo: y1,
       rows: state.rows ? state.rows.length : null,
@@ -309,9 +315,9 @@ function render() {
     const meanE = a.reduce((s, x) => s + x.E, 0) / a.length;
     const volume = (meanE * 1e-3 * state.area * 1e6) / 1e6;
     state.layer.bindPopup(
-      `<b>Водоём</b><br>Площадь ${state.area.toFixed(1)} км²<br>` +
-      `Испарение ${Math.round(meanE)} мм/год<br>` +
-      `Потери ${volume.toFixed(1)} млн м³/год`);
+      `<b>Water body</b><br>Area ${state.area.toFixed(1)} km²<br>` +
+      `Evaporation ${Math.round(meanE)} mm/year<br>` +
+      `Loss ${volume.toFixed(1)} million m³/year`);
   }
 }
 
@@ -322,42 +328,42 @@ function renderStats() {
   const avg = k => a.reduce((s, x) => s + x[k], 0) / a.length;
 
   if (state.selectedYear === null) {
-    head.textContent = `Сводка за ${a[0].year}–${a[a.length - 1].year}`;
+    head.textContent = `Summary for ${a[0].year}–${a[a.length - 1].year}`;
     const meanE = avg('E'), meanP = avg('P');
     const volume = (meanE * 1e-3 * state.area * 1e6) / 1e6;
 
     el.innerHTML = `
       <div class="stat"><div class="v">${Math.round(meanE)}</div>
-        <div class="l">Испарение, мм/год</div></div>
+        <div class="l">Evaporation, mm/year</div></div>
       <div class="stat"><div class="v">${Math.round(meanP)}</div>
-        <div class="l">Осадки, мм/год</div></div>
+        <div class="l">Precipitation, mm/year</div></div>
       <div class="stat"><div class="v">${Math.round(meanE - meanP)}</div>
-        <div class="l">Дефицит, мм/год</div></div>
+        <div class="l">Deficit, mm/year</div></div>
       <div class="stat"><div class="v">${avg('twMax').toFixed(1)}</div>
-        <div class="l">Макс. Tw, °C</div></div>
+        <div class="l">Max water temp, °C</div></div>
       <div class="stat" style="grid-column:1/-1">
-        <div class="v">${volume.toFixed(1)} млн м³</div>
-        <div class="l">теряется на испарение за год со всей акватории</div></div>`;
+        <div class="v">${volume.toFixed(1)} million m³</div>
+        <div class="l">lost to evaporation per year across the whole surface</div></div>`;
     return;
   }
 
   const y = a.find(x => x.year === state.selectedYear);
-  head.textContent = `Сводка за ${y.year} год`;
+  head.textContent = `Summary for ${y.year}`;
 
   const card = (val, label, key, unit, digits = 0) => {
     const d = val - avg(key);
     const cls = d > 0 ? 'up' : 'down';
     return `<div class="stat hl"><div class="v">${val.toFixed(digits)}</div>
       <div class="l">${label}</div>
-      <div class="d ${cls}">${d > 0 ? '+' : ''}${d.toFixed(0)} ${unit} к норме</div>
+      <div class="d ${cls}">${d > 0 ? '+' : ''}${d.toFixed(0)} ${unit} vs average</div>
     </div>`;
   };
 
   el.innerHTML =
-    card(y.E, 'Испарение, мм', 'E', 'мм') +
-    card(y.P, 'Осадки, мм', 'P', 'мм') +
-    card(y.deficit, 'Дефицит, мм', 'deficit', 'мм') +
-    card(y.twMax, 'Макс. Tw, °C', 'twMax', '°C', 1);
+    card(y.E, 'Evaporation, mm', 'E', 'mm') +
+    card(y.P, 'Precipitation, mm', 'P', 'mm') +
+    card(y.deficit, 'Deficit, mm', 'deficit', 'mm') +
+    card(y.twMax, 'Max water temp, °C', 'twMax', '°C', 1);
 }
 
 /** Матрица год × месяц: где и когда испарение выше нормы. */
@@ -393,7 +399,7 @@ function renderHeatmap() {
       const val = Number.isFinite(cell.E) ? cell.E : null;
       html += `<td><div class="cell" style="background:${color(cell.E)}"
                 title="${yr}, ${MONTHS[m - 1]}: ${
-                  val === null ? 'нет данных' : val.toFixed(1) + ' мм'}">
+                  val === null ? 'no data' : val.toFixed(1) + ' mm'}">
                 ${val === null ? '' : Math.round(val)}</div></td>`;
     }
     html += '</tr>';
@@ -401,11 +407,11 @@ function renderHeatmap() {
 
   document.getElementById('heatmap').innerHTML = html;
   document.getElementById('heatLegend').innerHTML =
-    `<span style="color:var(--muted)">${Math.round(min)} мм</span>
+    `<span style="color:var(--muted)">${Math.round(min)} mm</span>
      <span style="flex:1;height:8px;margin:0 8px;border-radius:2px;
        background:linear-gradient(to right,rgb(44,123,182),rgb(90,200,200),
        rgb(255,255,140),rgb(224,123,57))"></span>
-     <span style="color:var(--muted)">${Math.round(max)} мм</span>`;
+     <span style="color:var(--muted)">${Math.round(max)} mm</span>`;
 }
 
 const CHART_BASE = {
@@ -429,15 +435,15 @@ function renderClim() {
 
   const datasets = [];
   if (state.selectedYear) {
-    datasets.push({ label: 'Норма', data: norm, backgroundColor: '#3a4753',
+    datasets.push({ label: 'Average', data: norm, backgroundColor: '#3a4753',
                     order: 3 });
   }
   datasets.push({
-    label: state.selectedYear ? `Испарение ${state.selectedYear}` : 'Испарение',
+    label: state.selectedYear ? `Evaporation ${state.selectedYear}` : 'Evaporation',
     data: yearData, backgroundColor: '#e07b39', order: 2,
   });
   datasets.push({
-    label: 'Осадки', type: 'line',
+    label: 'Precipitation', type: 'line',
     data: state.selectedYear
       ? MONTHS.map((_, i) => {
           const m = state.monthly.find(
@@ -453,7 +459,7 @@ function renderClim() {
     type: 'bar',
     data: { labels: MONTHS, datasets },
     options: { ...CHART_BASE,
-      scales: { y: { title: { display: true, text: 'мм/мес' } } } },
+      scales: { y: { title: { display: true, text: 'mm/month' } } } },
   });
 }
 
@@ -469,15 +475,15 @@ function renderAnnual() {
     data: {
       labels: years,
       datasets: [
-        { label: 'Испарение', data: state.annual.map(a => a.E),
+        { label: 'Evaporation', data: state.annual.map(a => a.E),
           backgroundColor: years.map(y => hl(y) ? '#e07b39' : '#5a4030') },
-        { label: 'Осадки', data: state.annual.map(a => a.P),
+        { label: 'Precipitation', data: state.annual.map(a => a.P),
           backgroundColor: years.map(y => hl(y) ? '#4fa3d1' : '#2c4a5c') },
       ],
     },
     options: {
       ...CHART_BASE,
-      scales: { y: { title: { display: true, text: 'мм/год' } } },
+      scales: { y: { title: { display: true, text: 'mm/year' } } },
       onClick: (e, els) => {
         if (!els.length) return;
         const y = years[els[0].index];
@@ -506,16 +512,16 @@ function renderTs() {
 
   const cfg = kind === 'E'
     ? { ds: [
-        { label: 'Пенман (модельная Tw)', data: pts.map(p => p.ePenman),
+        { label: 'Penman (modelled water temp)', data: pts.map(p => p.ePenman),
           borderColor: '#e07b39', borderWidth: 1.2, pointRadius: 0, tension: 0.2 },
-        { label: 'Без теплозапаса', data: pts.map(p => p.eNoTw),
+        { label: 'Without heat storage', data: pts.map(p => p.eNoTw),
           borderColor: '#6b7785', borderWidth: 1, pointRadius: 0,
           borderDash: [4, 3], tension: 0.2 }],
-        unit: 'мм/сут' }
+        unit: 'mm/day' }
     : { ds: [
-        { label: 'Вода (модель)', data: pts.map(p => p.tw),
+        { label: 'Water (modelled)', data: pts.map(p => p.tw),
           borderColor: '#5ac8c8', borderWidth: 1.3, pointRadius: 0, tension: 0.2 },
-        { label: 'Воздух', data: pts.map(p => p.ta),
+        { label: 'Air', data: pts.map(p => p.ta),
           borderColor: '#6b7785', borderWidth: 1, pointRadius: 0, tension: 0.2 }],
         unit: '°C' };
 
@@ -551,43 +557,144 @@ function renderNotes() {
   const satEffect = a.reduce((s, x) => s + (x.E - x.EnoTw), 0) / a.length;
   const meanE = a.reduce((s, x) => s + x.E, 0) / a.length;
 
-  let html = `Максимум испарения приходится на ${MONTHS[peak.month - 1]}. `;
+  let html = `Evaporation peaks in ${MONTHS[peak.month - 1]}. `;
 
   if (trend) {
     html += trend.significant
-      ? `За период виден тренд ${trend.slope > 0 ? 'роста' : 'снижения'} на ` +
-        `<b>${Math.abs(trend.slope).toFixed(1)} мм/год</b> ` +
-        `(±${(2 * trend.se).toFixed(1)}), что превышает случайный разброс. `
-      : `Значимого тренда нет: наклон ${trend.slope.toFixed(1)} ± ` +
-        `${(2 * trend.se).toFixed(1)} мм/год, то есть неотличим от нуля ` +
-        `при таком числе лет. `;
+      ? `Over this period there is a ${trend.slope > 0 ? 'rising' : 'falling'} ` +
+        `trend of <b>${Math.abs(trend.slope).toFixed(1)} mm/year</b> ` +
+        `(±${(2 * trend.se).toFixed(1)}), which exceeds the random scatter. `
+      : `No significant trend: the slope is ${trend.slope.toFixed(1)} ± ` +
+        `${(2 * trend.se).toFixed(1)} mm/year, indistinguishable from zero ` +
+        `given this number of years. `;
   }
 
-  html += `Учёт теплозапаса меняет годовую сумму на ` +
-          `${(100 * satEffect / meanE).toFixed(1)} %, но сезонный ход — ` +
-          `гораздо сильнее: без него пик сдвигается на месяц раньше.`;
+  html += `Accounting for heat storage changes the annual total by ` +
+          `${(100 * satEffect / meanE).toFixed(1)} %, but it affects the ` +
+          `seasonal cycle far more: without it the peak moves a month earlier.`;
 
   document.getElementById('resultNote').innerHTML = html;
 }
 
 // ==================== экспорт ====================
 
-function download(name, text) {
-  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(a.href);
+/** Имя объекта → часть имени файла: латиница, цифры, дефисы. */
+function slug() {
+  const raw = (state.name || 'waterbody').trim().toLowerCase();
+  const map = {
+    а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'i',
+    к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',
+    х:'h',ц:'c',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya',
+  };
+  const latin = [...raw].map(ch => map[ch] ?? ch).join('');
+  const clean = latin.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return clean || 'waterbody';
 }
 
-document.getElementById('csvDaily').addEventListener('click',
-  () => download('evaporation_daily.csv', toCSV(state.rows)));
-document.getElementById('csvMonthly').addEventListener('click',
-  () => download('evaporation_monthly.csv', monthlyToCSV(state.monthly)));
+function period() {
+  const a = state.annual;
+  return a && a.length ? `${a[0].year}-${a[a.length - 1].year}` : '';
+}
+
+/** Короткая подсветка кнопки: подтверждение, что файл ушёл. */
+function flash(btn) {
+  if (!btn) return;
+  const prev = btn.textContent;
+  btn.textContent = 'done';
+  btn.classList.add('done');
+  setTimeout(() => { btn.textContent = prev; btn.classList.remove('done'); }, 1400);
+}
+
+document.getElementById('objName').addEventListener('input', e => {
+  state.name = e.target.value;
+});
+
+document.querySelectorAll('.png').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (!state.rows) { alert('Run the calculation first'); return; }
+
+    const base = `${slug()}-${period()}`;
+    const meta = metaFor(state);
+    const kind = btn.dataset.png;
+
+    // Без обёртки исключение уходит в консоль, кнопка ничего не делает, и
+    // пользователь видит только то, что «не скачивается».
+    try {
+    if (kind === 'heatmap') {
+      exportHeatmap(state.monthly, state.annual.map(a => a.year),
+                    `${base}-matrix.png`,
+                    { ...meta, title: `${meta.title} — by year and month, mm` });
+    } else if (kind === 'clim') {
+      exportChart(climChart, `${base}-seasonal-cycle.png`,
+                  { ...meta, title: `${meta.title} — seasonal cycle` });
+    } else if (kind === 'ann') {
+      exportChart(annChart, `${base}-year-to-year.png`,
+                  { ...meta, title: `${meta.title} — year to year` });
+    } else if (kind === 'ts') {
+      const series = document.querySelector('.tab.on').dataset.series;
+      const label = series === 'E' ? 'evaporation' : 'temperature';
+      exportChart(tsChart, `${base}-daily-${label}.png`,
+                  { ...meta, title: `${meta.title} — daily ${label}` });
+    }
+    flash(btn);
+    } catch (err) {
+      console.error('Chart export failed:', err);
+      alert(`Could not export the chart.\n\n${err.message}`);
+    }
+  });
+});
+
+document.getElementById('pngAll').addEventListener('click', e => {
+  if (!state.rows) { alert('Run the calculation first'); return; }
+
+  try {
+    exportAll(
+      [
+        { chart: climChart, label: 'Seasonal cycle, mm/month' },
+        { chart: annChart, label: 'Annual totals, mm' },
+        { chart: tsChart, label: 'Daily series' },
+      ],
+      null,
+      `${slug()}-${period()}-charts.png`,
+      metaFor(state));
+    flash(e.target);
+  } catch (err) {
+    console.error('Chart export failed:', err);
+    alert(`Could not export the charts.\n\n${err.message}`);
+  }
+});
+
+function download(name, text) {
+  // Ссылку нужно вставить в документ: Firefox игнорирует click() по элементу,
+  // которого нет в DOM. И освобождать URL сразу нельзя — скачивание может не
+  // успеть начаться.
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 1000);
+}
+
+document.getElementById('csvDaily').addEventListener('click', () => {
+  if (!state.rows) { alert('Run the calculation first'); return; }
+  download(`${slug()}-${period()}-daily.csv`, toCSV(state.rows));
+});
+document.getElementById('csvMonthly').addEventListener('click', () => {
+  if (!state.monthly) { alert('Run the calculation first'); return; }
+  download(`${slug()}-${period()}-monthly.csv`, monthlyToCSV(state.monthly));
+});
 document.getElementById('csvGeo').addEventListener('click', () => {
-  const gj = drawn.toGeoJSON();
-  download('lake_outline.geojson', JSON.stringify(gj, null, 2));
+  download(`${slug()}-outline.geojson`,
+           JSON.stringify(drawn.toGeoJSON(), null, 2));
 });
 
 // ==================== шаги ====================

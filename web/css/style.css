@@ -46,6 +46,22 @@ h2 {
 }
 h2:first-of-type { margin-top: 0; }
 
+/* кнопка PNG в заголовке блока */
+.png {
+  float: right; margin-top: -3px;
+  padding: 2px 8px; font-size: 10px; letter-spacing: .04em;
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 4px; cursor: pointer; text-transform: none;
+}
+.png:hover { border-color: var(--accent); color: var(--accent); }
+.png.done { border-color: var(--ok); color: var(--ok); }
+
+input[type=text] {
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 5px; padding: 6px 9px; font-size: 13px; font-family: inherit;
+  width: 100%;
+}
+
 /* ---------- шаги ---------- */
 .step {
   background: var(--card); border-radius: 8px; padding: 13px 15px;

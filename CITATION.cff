@@ -3,7 +3,8 @@ title: sorbulak-evap
 message: Расчёт испарения с водной поверхности по ERA5 и спутниковой термометрии
 type: software
 authors:
-  - name: contributors
+  - family-names: Bekbayeva
+    given-names: Aigul
 repository-code: https://github.com/USER/sorbulak-evap
 license: MIT
 version: 0.2.0

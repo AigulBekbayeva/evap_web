@@ -25,14 +25,36 @@ const CREDIT = 'Developed by Aigul Bekbayeva';
 
 const FONT = '-apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
+/**
+ * Saves a canvas as a PNG file.
+ *
+ * Two things that are easy to get wrong here:
+ *
+ *  - The anchor must be inserted into the document. Firefox silently ignores
+ *    click() on an element that is not in the DOM, so the download never
+ *    starts and no error is raised.
+ *  - toDataURL is used rather than toBlob. toBlob is asynchronous, and by the
+ *    time its callback runs the browser no longer treats the click as a user
+ *    gesture, which some browsers require for a download to proceed.
+ */
 function download(canvas, filename) {
-  canvas.toBlob(blob => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-  }, 'image/png');
+  if (!canvas.width || !canvas.height) {
+    throw new Error(
+      'The chart canvas has zero size, so there is nothing to export. '
+      + 'This usually means the chart was built while its container was '
+      + 'hidden. Re-run the calculation and try again.');
+  }
+
+  const url = canvas.toDataURL('image/png');
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+
+  setTimeout(() => document.body.removeChild(a), 1000);
 }
 
 /**
@@ -110,7 +132,14 @@ function opaqueChart(chart) {
  * SCALE so that it matches that density.
  */
 export function exportChart(chart, filename, meta) {
-  if (!chart) return;
+  if (!chart || !chart.canvas) {
+    throw new Error('Chart is not ready yet. Run the calculation first.');
+  }
+  if (!chart.canvas.width || !chart.canvas.height) {
+    throw new Error(
+      'The chart has zero size and cannot be exported. Try resizing the '
+      + 'window and running the calculation again.');
+  }
   download(frame(opaqueChart(chart), meta), filename);
 }
 

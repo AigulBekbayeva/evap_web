@@ -288,5 +288,117 @@ try {
   check(true, 'нет ветра нигде', `"${e.message.slice(0, 50)}…"`);
 }
 
+
+// ---------- экспорт диаграмм ----------
+console.log('\nЭкспорт PNG:');
+
+/**
+ * Диаграммы не скачивались по двум причинам сразу, и обе давали ТИШИНУ,
+ * а не ошибку:
+ *
+ *   1. render() вызывался раньше, чем показывался контейнер результатов.
+ *      Chart.js измеряет размеры при создании и в скрытом блоке получает
+ *      холст 0×0. На экране графики появлялись (срабатывал resize), но
+ *      canvas.width оставался нулевым, и экспорт давал пустой файл.
+ *   2. Ссылка для скачивания не вставлялась в документ. Firefox игнорирует
+ *      click() по элементу вне DOM, не поднимая исключения.
+ *
+ * Отсюда требования: нулевой холст обязан давать внятную ошибку, а ссылка —
+ * попадать в DOM до клика.
+ */
+{
+  const appended = [], clicked = [];
+  const madeCanvases = [];
+  const fakeCtx = () => new Proxy({}, {
+    get: (t, k) => {
+      if (k === 'createLinearGradient') return () => ({ addColorStop() {} });
+      if (k === 'measureText') return () => ({ width: 60 });
+      return () => {};
+    },
+    set: () => true,
+  });
+
+  const realDoc = globalThis.document;
+  globalThis.document = {
+    createElement: (t) => {
+      if (t === 'canvas') {
+        const c = { width: 0, height: 0, getContext: fakeCtx,
+                    toDataURL: () => 'data:image/png;base64,AAA' };
+        madeCanvases.push(c);
+        return c;
+      }
+      const el = { style: {}, href: '', download: '',
+                   click() { clicked.push(el.download); } };
+      return el;
+    },
+    body: { appendChild: (el) => appended.push(el), removeChild() {} },
+  };
+  const realTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (f) => f();
+
+  const { exportChart, exportHeatmap, metaFor } = await import('./js/export.js');
+  const meta = metaFor({
+    name: 'Test Reservoir', area: 760, centroid: { lat: 41.13, lng: 68.16 },
+    annual: [{ year: 2020, E: 1578 }, { year: 2021, E: 1600 }],
+  });
+
+  // нулевой холст — внятная ошибка, не тишина
+  try {
+    exportChart({ canvas: { width: 0, height: 0 } }, 'x.png', meta);
+    check(false, 'нулевой холст', 'экспорт прошёл молча');
+  } catch (e) {
+    check(/zero size/.test(e.message), 'нулевой холст даёт ошибку',
+          `"${e.message.slice(0, 40)}…"`);
+  }
+
+  try {
+    exportChart(null, 'x.png', meta);
+    check(false, 'график не готов', 'экспорт прошёл молча');
+  } catch (e) {
+    check(/not ready/.test(e.message), 'график не готов даёт ошибку');
+  }
+
+  // нормальный график: ссылка в DOM, клик после вставки
+  appended.length = 0; clicked.length = 0;
+  exportChart({ canvas: { width: 900, height: 380 } }, 'chart.png', meta);
+  check(appended.length === 1 && clicked.length === 1,
+        'ссылка вставлена в DOM перед click',
+        `appended=${appended.length} clicked=${clicked.length}`);
+  check(clicked[0] === 'chart.png', 'имя файла передано', clicked[0]);
+
+  // подпись автора попадает в кадр
+  const texts = [];
+  const savedCreate = globalThis.document.createElement;
+  globalThis.document.createElement = (t) => {
+    if (t === 'canvas') {
+      const c = {
+        width: 0, height: 0,
+        getContext: () => new Proxy({}, {
+          get: (tt, k) => {
+            if (k === 'createLinearGradient') return () => ({ addColorStop() {} });
+            if (k === 'fillText') return (txt) => texts.push(txt);
+            if (k === 'measureText') return () => ({ width: 60 });
+            return () => {};
+          },
+          set: () => true,
+        }),
+        toDataURL: () => 'data:image/png;base64,AAA',
+      };
+      return c;
+    }
+    return { style: {}, href: '', download: '', click() {} };
+  };
+  exportChart({ canvas: { width: 900, height: 380 } }, 'c.png', meta);
+  check(texts.includes('Developed by Aigul Bekbayeva'),
+        'подпись автора нанесена на картинку');
+  check(texts.some(t => /Test Reservoir/.test(t)), 'заголовок нанесён');
+  check(!texts.some(t => typeof t === 'string' && /[а-яА-Я]/.test(t)),
+        'в подписях нет кириллицы');
+
+  globalThis.document.createElement = savedCreate;
+  globalThis.document = realDoc;
+  globalThis.setTimeout = realTimeout;
+}
+
 console.log(failures ? `\n${failures} проверок провалено` : '\nвсе проверки пройдены');
 process.exit(failures ? 1 : 0);

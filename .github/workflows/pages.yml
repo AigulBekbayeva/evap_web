@@ -25,7 +25,7 @@ jobs:
       # Расчётное ядро проверяется до публикации: формулы легко сломать
       # незаметно, а ошибка попадёт сразу всем пользователям.
       - name: Проверки расчёта
-        run: cd web && node test.mjs
+        run: cd web && node test.mjs && node test-robustness.mjs
 
   deploy:
     needs: test

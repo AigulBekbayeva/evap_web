@@ -103,11 +103,44 @@ function centroidOf(latlngs) {
   return { lat: lat / latlngs.length, lng: lng / latlngs.length };
 }
 
+/**
+ * Достаёт внешнее кольцо из чего угодно, что вернул Leaflet.
+ *
+ * getLatLngs() отдаёт разную вложенность: простой полигон — [ring],
+ * полигон с дырами — [outer, hole...], MultiPolygon из GeoJSON —
+ * [[ring], [ring]]. Без разбора вложенности координаты выходят undefined и
+ * ломаются дальше по цепочке невнятной ошибкой.
+ */
+function outerRing(latlngs) {
+  let cur = latlngs;
+  let guard = 0;
+  while (Array.isArray(cur) && cur.length && !(cur[0] instanceof L.LatLng)) {
+    cur = cur[0];
+    if (++guard > 5) break;
+  }
+  return Array.isArray(cur) && cur[0] instanceof L.LatLng ? cur : null;
+}
+
 function onShapeReady(layer) {
-  const pts = layer.getLatLngs()[0];
+  const pts = outerRing(layer.getLatLngs());
+
+  if (!pts || pts.length < 3) {
+    alert('Не удалось прочитать контур: нужен замкнутый многоугольник ' +
+          'минимум из трёх точек.');
+    return;
+  }
   state.layer = layer;
   state.area = sphericalAreaKm2(pts);
   state.centroid = centroidOf(pts);
+
+  if (!Number.isFinite(state.centroid.lat) ||
+      !Number.isFinite(state.centroid.lng) ||
+      !Number.isFinite(state.area) || state.area <= 0) {
+    alert('Контур дал некорректные координаты. Нарисуйте его заново.');
+    state.layer = null;
+    updateSteps();
+    return;
+  }
 
   document.getElementById('shapeInfo').innerHTML =
     `Площадь <b>${state.area.toFixed(1)} км²</b>, центр ` +
@@ -202,10 +235,38 @@ async function run() {
     await new Promise(r => setTimeout(r, 30));   // дать браузеру перерисоваться
 
     const rows = computeEvaporation(met, depth, 365);
+
+    if (!rows.length) {
+      throw new Error(
+        'После вычета года на раскрутку модели данных не осталось. ' +
+        'Задайте период хотя бы в два года.');
+    }
+
+    const bad = rows.filter(r => !Number.isFinite(r.ePenman)
+                                || !Number.isFinite(r.tw));
+    if (bad.length) {
+      // Лучше остановиться здесь, чем отрисовать матрицу из NaN: ошибка
+      // всплывёт в отрисовке и укажет на палитру, а не на данные.
+      console.error('Первые испорченные сутки:', bad.slice(0, 5));
+      throw new Error(
+        `Расчёт дал некорректные значения для ${bad.length} суток ` +
+        `из ${rows.length}. Подробности в консоли браузера.`);
+    }
+
+    const annual = aggregateAnnual(rows);
+    if (!annual.length) {
+      // aggregateAnnual отбрасывает годы короче 350 суток: их суммы
+      // несопоставимы с полными. Если не осталось ни одного — считать нечего.
+      throw new Error(
+        `Нет ни одного полного года: получено ${rows.length} суток после ` +
+        'раскрутки. Расширьте период — нужен минимум один календарный год ' +
+        'сверх года раскрутки.');
+    }
+
     state.rows = rows;
     state.monthly = aggregateMonthly(rows);
-    state.annual = aggregateAnnual(rows);
-    state.clim = climatology(state.monthly, state.annual.map(a => a.year));
+    state.annual = annual;
+    state.clim = climatology(state.monthly, annual.map(a => a.year));
     state.selectedYear = null;
 
     bar.style.width = '100%';
@@ -217,7 +278,14 @@ async function run() {
     setTimeout(() => prog.classList.remove('show'), 1500);
   } catch (err) {
     ptext.textContent = `Ошибка: ${err.message}`;
-    console.error(err);
+    // Полный стек — в консоль: сообщение в интерфейсе не показывает, где
+    // именно сломалось, а при разборе проблемы это первое, что нужно.
+    console.error('Расчёт прерван:', err);
+    console.error('Состояние:', {
+      area: state.area, centroid: state.centroid,
+      depth, yearFrom: y0, yearTo: y1,
+      rows: state.rows ? state.rows.length : null,
+    });
   } finally {
     btn.disabled = false;
     updateSteps();
@@ -298,15 +366,18 @@ function renderHeatmap() {
   const vals = state.monthly.filter(m => years.includes(m.year));
   if (!vals.length) return;
 
-  const min = Math.min(...vals.map(v => v.E));
-  const max = Math.max(...vals.map(v => v.E));
+  const finite = vals.map(v => v.E).filter(Number.isFinite);
+  if (!finite.length) return;
+  const min = Math.min(...finite);
+  const max = Math.max(...finite);
 
   const color = v => {
     const t = (v - min) / (max - min || 1);
     // тёмно-синий → бирюзовый → жёлтый → оранжевый
     const stops = [[44,123,182], [90,200,200], [255,255,140], [224,123,57]];
-    const i = Math.min(Math.floor(t * 3), 2);
-    const f = t * 3 - i;
+    // при t = 1 индекс должен остаться 2, иначе stops[i+1] выйдет за массив
+    const i = Math.min(Math.max(Math.floor(t * 3), 0), stops.length - 2);
+    const f = Math.min(Math.max(t * 3 - i, 0), 1);
     const c = stops[i].map((s, k) => Math.round(s + (stops[i + 1][k] - s) * f));
     return `rgb(${c.join(',')})`;
   };
@@ -319,9 +390,11 @@ function renderHeatmap() {
     for (let m = 1; m <= 12; m++) {
       const cell = vals.find(v => v.year === yr && v.month === m);
       if (!cell) { html += '<td></td>'; continue; }
+      const val = Number.isFinite(cell.E) ? cell.E : null;
       html += `<td><div class="cell" style="background:${color(cell.E)}"
-                title="${yr}, ${MONTHS[m - 1]}: ${cell.E.toFixed(1)} мм">
-                ${Math.round(cell.E)}</div></td>`;
+                title="${yr}, ${MONTHS[m - 1]}: ${
+                  val === null ? 'нет данных' : val.toFixed(1) + ' мм'}">
+                ${val === null ? '' : Math.round(val)}</div></td>`;
     }
     html += '</tr>';
   }
@@ -471,7 +544,9 @@ document.querySelectorAll('.tab').forEach(t => {
 function renderNotes() {
   const a = state.annual;
   const trend = linearTrend(a.map(x => x.year), a.map(x => x.E));
-  const peak = state.clim.reduce((b, c) => (c.E > b.E ? c : b));
+  const peak = state.clim.length
+    ? state.clim.reduce((b, c) => (c.E > b.E ? c : b))
+    : { month: 1, E: 0 };
 
   const satEffect = a.reduce((s, x) => s + (x.E - x.EnoTw), 0) / a.length;
   const meanE = a.reduce((s, x) => s + x.E, 0) / a.length;

@@ -59,7 +59,14 @@ export async function fetchArchive(lat, lon, startYear, endYear,
       timezone: 'UTC',
     });
 
-    const resp = await fetch(`${ARCHIVE_URL}?${params}`);
+    let resp;
+    try {
+      resp = await fetch(`${ARCHIVE_URL}?${params}`);
+    } catch (e) {
+      throw new Error(
+        'Не удалось связаться с Open-Meteo. Проверьте интернет-соединение ' +
+        'или блокировщик запросов.');
+    }
 
     if (!resp.ok) {
       if (resp.status === 400 && model === 'era5_land') {
@@ -68,16 +75,62 @@ export async function fetchArchive(lat, lon, startYear, endYear,
         onProgress(0, 'ERA5-Land недоступен здесь, перехожу на ERA5…');
         return fetchArchive(lat, lon, startYear, endYear, 'era5', onProgress);
       }
-      const body = await resp.text();
-      throw new Error(`Open-Meteo вернул ${resp.status}: ${body.slice(0, 200)}`);
+      let reason = `${resp.status}`;
+      try {
+        const j = await resp.json();
+        if (j.reason) reason = j.reason;
+      } catch { /* тело не JSON — оставляем код статуса */ }
+      throw new Error(`Open-Meteo отклонил запрос: ${reason}`);
     }
 
     const json = await resp.json();
-    all.push(json.hourly);
+    const hourly = normaliseHourly(json.hourly, model);
+
+    if (!hourly) {
+      throw new Error(
+        `Open-Meteo вернул ответ без ожидаемых полей за ${y0}–${y1}. ` +
+        'Возможно, для этой точки нет данных выбранной модели.');
+    }
+    all.push(hourly);
   }
 
   onProgress(0.95, 'Агрегация до суток…');
   return aggregateDaily(all, model);
+}
+
+/**
+ * Приводит ответ Open-Meteo к ожидаемым именам полей.
+ *
+ * При указании параметра models API может возвращать ключи с суффиксом модели
+ * — `temperature_2m_era5_land` вместо `temperature_2m`. Поведение зависит от
+ * версии и от того, запрошена одна модель или несколько. Без нормализации
+ * весь разбор ответа рассыпается на невнятной ошибке доступа к undefined.
+ *
+ * Возвращает null, если обязательных полей нет вовсе.
+ */
+function normaliseHourly(hourly, model) {
+  if (!hourly || !Array.isArray(hourly.time)) return null;
+
+  const out = { time: hourly.time };
+  const suffix = `_${model}`;
+
+  for (const v of HOURLY_VARS) {
+    if (Array.isArray(hourly[v])) {
+      out[v] = hourly[v];
+    } else if (Array.isArray(hourly[v + suffix])) {
+      out[v] = hourly[v + suffix];
+    } else {
+      // ищем любой ключ, начинающийся с имени переменной
+      const key = Object.keys(hourly).find(
+        k => k.startsWith(v) && Array.isArray(hourly[k]));
+      out[v] = key ? hourly[key] : null;
+    }
+  }
+
+  // без температуры и точки росы считать нечего; облачность и осадки
+  // можно пережить
+  if (!out.temperature_2m || !out.dew_point_2m) return null;
+  return out;
 }
 
 /**
@@ -96,14 +149,22 @@ function aggregateDaily(chunks, model) {
         byDay.set(day, { ta: [], tdew: [], p: [], u: [], rs: [], cc: [], pr: [] });
       }
       const d = byDay.get(day);
-      const push = (arr, v) => { if (v !== null && v !== undefined) arr.push(v); };
-      push(d.ta, h.temperature_2m[i]);
-      push(d.tdew, h.dew_point_2m[i]);
-      push(d.p, h.surface_pressure[i]);
-      push(d.u, h.wind_speed_10m[i]);
-      push(d.rs, h.shortwave_radiation[i]);
-      push(d.cc, h.cloud_cover[i]);
-      push(d.pr, h.precipitation[i]);
+      // Часть переменных может отсутствовать целиком — берём безопасно,
+      // иначе одна недостающая колонка рушит весь расчёт.
+      const at = (name, idx) => {
+        const arr = h[name];
+        return Array.isArray(arr) ? arr[idx] : null;
+      };
+      const push = (arr, v) => {
+        if (v !== null && v !== undefined && Number.isFinite(v)) arr.push(v);
+      };
+      push(d.ta, at('temperature_2m', i));
+      push(d.tdew, at('dew_point_2m', i));
+      push(d.p, at('surface_pressure', i));
+      push(d.u, at('wind_speed_10m', i));
+      push(d.rs, at('shortwave_radiation', i));
+      push(d.cc, at('cloud_cover', i));
+      push(d.pr, at('precipitation', i));
     }
   }
 
@@ -111,14 +172,18 @@ function aggregateDaily(chunks, model) {
   const sum = a => a.reduce((x, y) => x + y, 0);
 
   const out = [];
+  const skipped = [];
   for (const [date, d] of [...byDay.entries()].sort()) {
-    if (d.ta.length < 20) continue;   // неполные сутки отбрасываем
+    // неполные сутки отбрасываем; без давления и ветра расчёт невозможен
+    if (d.ta.length < 20 || !d.tdew.length) continue;
 
     const ta = mean(d.ta);
     const tdew = mean(d.tdew);
     const cloud = d.cc.length ? mean(d.cc) : 50;
+    const pKpa = d.p.length ? mean(d.p) / 10.0 : 101.3;   // гПа → кПа
+    const u10 = d.u.length ? mean(d.u) / 3.6 : 2.0;       // км/ч → м/с
 
-    out.push({
+    const rec = {
       date,
       year: +date.slice(0, 4),
       month: +date.slice(5, 7),
@@ -126,17 +191,42 @@ function aggregateDaily(chunks, model) {
       taMin: Math.min(...d.ta),
       taMax: Math.max(...d.ta),
       tdew,
-      pKpa: mean(d.p) / 10.0,             // гПа → кПа
-      u10: mean(d.u) / 3.6,               // км/ч → м/с
-      u10Max: Math.max(...d.u) / 3.6,
+      pKpa,
+      u10,
+      u10Max: d.u.length ? Math.max(...d.u) / 3.6 : u10,
       rsDown: (sum(d.rs) * 3600) / 1e6,   // Вт/м²·ч → МДж/м²
       rlDown: ph.estimateRlDown(ta, tdew, cloud),
       cloud,
       prcp: sum(d.pr),
-    });
+    };
+
+    // Последний рубеж: ни одно поле не должно быть NaN или Infinity.
+    // Один испорченный день заражает месячную сумму, та — палитру матрицы,
+    // и падение случается далеко от причины, с бесполезным сообщением.
+    const bad = ['ta', 'tdew', 'pKpa', 'u10', 'rsDown', 'rlDown', 'prcp']
+      .filter(k => !Number.isFinite(rec[k]));
+    if (bad.length) { skipped.push({ date, bad }); continue; }
+
+    out.push(rec);
   }
 
-  if (!out.length) throw new Error('Open-Meteo не вернул пригодных данных');
+  if (skipped.length) {
+    console.warn(`Отброшено ${skipped.length} суток с некорректными ` +
+                 'значениями. Первые:', skipped.slice(0, 5));
+  }
+  if (skipped.length > byDay.size * 0.5) {
+    throw new Error(
+      `Более половины суток (${skipped.length} из ${byDay.size}) содержат ` +
+      `некорректные значения (${[...new Set(skipped.flatMap(x => x.bad))]
+        .join(', ')}). Для этой точки данных выбранной модели, ` +
+      'по-видимому, нет.');
+  }
+
+  if (!out.length) {
+    throw new Error(
+      'Open-Meteo не вернул пригодных данных за указанный период. ' +
+      'Проверьте координаты и годы.');
+  }
   out.model = model;
   return out;
 }

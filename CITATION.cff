@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: sorbulak-evap
+message: Расчёт испарения с водной поверхности по ERA5 и спутниковой термометрии
+type: software
+authors:
+  - name: contributors
+repository-code: https://github.com/USER/sorbulak-evap
+license: MIT
+version: 0.2.0
+abstract: >-
+  Инструмент для расчёта испарения с поверхности озёр и водохранилищ методом
+  Пенмана. Метеорология из реанализа ERA5 через Open-Meteo Archive API,
+  температура воды либо со спутника (Landsat, MODIS), либо из модели теплового
+  баланса. Включает браузерное приложение, где контур водоёма рисуется на карте.
+keywords:
+  - evaporation
+  - penman
+  - remote sensing
+  - ERA5
+  - water balance

@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+.env
+
+# Данные не версионируются: шейп кладёт пользователь,
+# выгрузки и результаты воспроизводимы из кода.
+data/shapes/*
+!data/shapes/.gitkeep
+!data/shapes/README.md
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/outputs/*
+!data/outputs/.gitkeep
+
+# учётные данные Earth Engine
+.config/earthengine/
+*credentials*.json

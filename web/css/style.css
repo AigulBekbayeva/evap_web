@@ -1,0 +1,179 @@
+:root {
+  --bg: #0f1419;
+  --panel: #161d24;
+  --card: #1e2831;
+  --card2: #253039;
+  --line: #2c3a47;
+  --text: #e6edf3;
+  --muted: #8b9aa8;
+  --dim: #6b7785;
+  --accent: #4fa3d1;
+  --warm: #e07b39;
+  --cool: #5ac8c8;
+  --ok: #5fb87a;
+  --warn: #d9a441;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#app { display: flex; height: 100vh; overflow: hidden; }
+#mapWrap { flex: 1 1 auto; min-width: 0; position: relative; }
+#map { width: 100%; height: 100%; background: #0b0f14; }
+
+#side {
+  width: 440px;
+  flex: 0 0 440px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 18px;
+}
+
+h1 { font-size: 17px; margin: 0 0 3px; font-weight: 650; }
+.tagline { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+h2 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); margin: 22px 0 9px; font-weight: 600;
+}
+h2:first-of-type { margin-top: 0; }
+
+/* ---------- шаги ---------- */
+.step {
+  background: var(--card); border-radius: 8px; padding: 13px 15px;
+  margin-bottom: 10px; border: 1px solid transparent;
+}
+.step.active { border-color: var(--accent); }
+.step.done { opacity: .75; }
+.step-head { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+.step-num {
+  width: 21px; height: 21px; border-radius: 50%; background: var(--card2);
+  display: grid; place-items: center; font-size: 11px; flex: 0 0 auto;
+  color: var(--muted);
+}
+.step.active .step-num { background: var(--accent); color: #08131c; }
+.step.done .step-num { background: var(--ok); color: #08131c; }
+.step-body { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* ---------- элементы управления ---------- */
+.row { display: flex; gap: 9px; align-items: center; margin-top: 10px; }
+.row label { font-size: 12px; color: var(--muted); flex: 0 0 auto; }
+
+button {
+  background: var(--card2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 7px 13px; cursor: pointer; font-size: 13px;
+  font-family: inherit; transition: border-color .15s, background .15s;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button.primary {
+  background: var(--accent); border-color: var(--accent); color: #08131c;
+  font-weight: 600; width: 100%; padding: 10px;
+}
+button.primary:hover:not(:disabled) { background: #5fb3e1; }
+button.small { padding: 5px 10px; font-size: 12px; }
+button.on { background: var(--accent); border-color: var(--accent);
+            color: #08131c; font-weight: 600; }
+
+input[type=number], select {
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  border-radius: 5px; padding: 6px 9px; font-size: 13px; font-family: inherit;
+  width: 100%;
+}
+input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+/* ---------- прогресс ---------- */
+#progress { margin-top: 12px; display: none; }
+#progress.show { display: block; }
+.pbar { height: 4px; background: var(--card2); border-radius: 2px;
+        overflow: hidden; }
+.pbar > div { height: 100%; background: var(--accent); width: 0;
+              transition: width .3s; }
+.ptext { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+/* ---------- сводка ---------- */
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat { background: var(--card); border-radius: 7px; padding: 11px 13px;
+        border: 1px solid transparent; }
+.stat.hl { border-color: var(--accent); }
+.stat .v { font-size: 21px; font-weight: 650; line-height: 1.12;
+           font-variant-numeric: tabular-nums; }
+.stat .l { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.stat .d { font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.up { color: var(--warm); }
+.down { color: var(--cool); }
+
+/* ---------- графики ---------- */
+.box { background: var(--card); border-radius: 7px; padding: 11px;
+       margin-bottom: 10px; }
+.box canvas { max-height: 185px; }
+
+.tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.tab { flex: 1; padding: 6px 4px; text-align: center; font-size: 12px;
+       background: var(--card); border: 1px solid var(--line);
+       border-radius: 5px; cursor: pointer; color: var(--muted); }
+.tab.on { background: var(--accent); border-color: var(--accent);
+          color: #08131c; font-weight: 600; }
+
+/* ---------- матрица год × месяц ---------- */
+.heat { width: 100%; border-collapse: collapse; font-size: 10px;
+        font-variant-numeric: tabular-nums; }
+.heat th { color: var(--muted); font-weight: 500; padding: 3px 2px;
+           font-size: 10px; }
+.heat td { padding: 0; }
+.heat .cell { height: 19px; text-align: center; border-radius: 2px;
+              color: #0b0f14; font-weight: 600; cursor: default; }
+.heat .yr { color: var(--muted); text-align: right; padding-right: 6px;
+            font-size: 10px; }
+
+/* ---------- прочее ---------- */
+.note { font-size: 11px; color: var(--muted); line-height: 1.5;
+        border-left: 2px solid var(--line); padding-left: 10px; margin: 10px 0; }
+.note.warn { border-left-color: var(--warn); }
+.note b { color: var(--text); font-weight: 600; }
+
+.legend { background: rgba(22,29,36,.95); padding: 9px 11px; border-radius: 6px;
+          font-size: 11px; line-height: 1.4; border: 1px solid var(--line);
+          color: var(--text); }
+.legend .bar { height: 9px; border-radius: 2px; margin: 5px 0 3px; width: 140px; }
+.legend .ends { display: flex; justify-content: space-between;
+                color: var(--muted); }
+
+.hint {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  background: rgba(22,29,36,.96); border: 1px solid var(--line);
+  border-radius: 7px; padding: 9px 15px; font-size: 13px; z-index: 900;
+  pointer-events: none; transition: opacity .3s;
+}
+.hint.hide { opacity: 0; }
+
+.leaflet-control-layers {
+  background: rgba(22,29,36,.96) !important; color: var(--text) !important;
+  border: 1px solid var(--line) !important;
+}
+.leaflet-control-layers label { color: var(--text) !important; }
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--card); color: var(--text);
+}
+.leaflet-container { background: #0b0f14; font: inherit; }
+.leaflet-draw-toolbar a { background-color: #263039 !important; }
+
+footer { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line);
+         font-size: 11px; color: var(--dim); line-height: 1.6; }
+footer a { color: var(--muted); }
+
+@media (max-width: 900px) {
+  #app { flex-direction: column; height: auto; }
+  #mapWrap { height: 55vh; flex: none; }
+  #side { width: 100%; flex: none; border-left: none;
+          border-top: 1px solid var(--line); }
+}

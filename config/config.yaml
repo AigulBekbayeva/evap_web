@@ -1,0 +1,41 @@
+# Конфигурация расчёта испарения.
+# Разумные значения по умолчанию заданы в src/evap/config.py,
+# здесь переопределяется только нужное.
+
+# --- период ---
+start: "2000-01-01"
+end: "2026-01-01"
+
+# --- Earth Engine ---
+# ID облачного проекта GEE. Обязателен для аккаунтов, зарегистрированных
+# после 2023 г. Получить: https://code.earthengine.google.com
+gee_project: null
+
+era5_scale: 9000            # родное разрешение ERA5-Land, менять не нужно
+landsat_sensors: ["L8", "L9"]
+use_modis: true             # уплотняет ряд Tw, но грубее Landsat
+
+# --- геометрия ---
+# Отступ от берега для термометрии. Прибрежные пиксели смешаны с сушей и
+# завышают летнюю температуру на несколько градусов.
+# 60 м = два пикселя Landsat. Для узких водоёмов уменьшить.
+erode_metres: 60.0
+
+# --- морфометрия ---
+# ГЛАВНЫЙ НЕИЗВЕСТНЫЙ ПАРАМЕТР. Определяет теплозапас и через него сезонный
+# ход испарения. Годовая сумма к нему малочувствительна.
+# Подобрать: python scripts/calibrate_depth.py
+mean_depth_m: 10.0
+mixed_depth_source: "parameterised"   # constant | parameterised
+
+# --- обработка температуры воды ---
+tw_interp_method: "harmonic"   # harmonic | linear
+tw_smooth_days: 15             # сглаживание Tw перед вычислением dTw/dt
+
+force_download: false
+
+paths:
+  shapes: "data/shapes"
+  raw: "data/raw"
+  processed: "data/processed"
+  outputs: "data/outputs"

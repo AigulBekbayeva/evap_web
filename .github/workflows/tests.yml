@@ -1,0 +1,42 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Тесты работают на синтетике: ни Earth Engine, ни сети не требуется
+      - run: pip install numpy pandas pyarrow matplotlib pyyaml requests pytest
+      - run: python -m pytest tests/ -v
+
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: cd web && node test.mjs
+
+  js-python-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: pip install numpy pandas
+      # web/js/physics.js — ручной порт src/evap/physics.py.
+      # Расхождение констант даёт правдоподобные, но неверные числа.
+      - run: PYTHONPATH=src python scripts/check_js_port.py

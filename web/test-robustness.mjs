@@ -39,7 +39,9 @@ function hourlyMock({ suffix = '', drop = [] } = {}) {
     data.temperature_2m.push(ta);
     data.dew_point_2m.push(ta - 9);
     data.surface_pressure.push(920);
-    data.wind_speed_10m.push(11);            // км/ч
+    // Ветер должен ВАРЬИРОВАТЬ: постоянное значение валидация справедливо
+    // считает признаком отсутствующих данных.
+    data.wind_speed_10m.push(9 + 5 * Math.sin(i / 37) + 3 * Math.sin(i / 7));  // км/ч
     data.shortwave_radiation.push(
       Math.max(0, 700 * Math.sin((Math.PI * (hr - 6)) / 12))
       * (0.5 + 0.5 * Math.sin(w - 1.9)));
@@ -79,7 +81,6 @@ for (const [name, opts] of [
   ['ключи с суффиксом модели', { suffix: '_era5_land' }],
   ['нет облачности', { drop: ['cloud_cover'] }],
   ['нет давления', { drop: ['surface_pressure'] }],
-  ['нет ветра', { drop: ['wind_speed_10m'] }],
   ['нет осадков', { drop: ['precipitation'] }],
 ]) {
   try {
@@ -180,7 +181,6 @@ for (const [name, vars] of [
   ['давление из null', ['surface_pressure']],
   ['облачность из null', ['cloud_cover']],
   ['давление и облачность из null', ['surface_pressure', 'cloud_cover']],
-  ['ветер из null', ['wind_speed_10m']],
 ]) {
   mockFetch(hourlyWithNulls(vars));
   try {
@@ -197,6 +197,20 @@ for (const [name, vars] of [
   }
 }
 
+// Ветер и радиация — обязательные: они образуют два слагаемых Пенмана.
+// Раньше отсутствие ветра подменялось константой 2 м/с, и расчёт молча
+// занижал результат. Теперь это ошибка.
+for (const v of ['wind_speed_10m', 'shortwave_radiation']) {
+  mockFetch(hourlyWithNulls([v]));
+  try {
+    await meteo.fetchArchive(43.68, 76.58, 2021, 2022, 'era5', () => {});
+    check(false, `${v} из null`, 'посчитал вместо отказа');
+  } catch (e) {
+    check(!/reading '|of undefined/.test(e.message),
+          `${v} из null`, `"${e.message.slice(0, 45)}…"`);
+  }
+}
+
 // температура из null — считать нечего, нужна внятная ошибка
 mockFetch(hourlyWithNulls(['temperature_2m']));
 try {
@@ -205,6 +219,73 @@ try {
 } catch (e) {
   check(!/reading '|of undefined/.test(e.message),
         'температура из null', `"${e.message.slice(0, 50)}…"`);
+}
+
+
+// ---------- отсутствие ключевых переменных должно ОСТАНАВЛИВАТЬ расчёт ----------
+console.log('\nКлючевые переменные:');
+
+/**
+ * Случай, обнаруженный на реальном расчёте по Шардаринскому водохранилищу.
+ *
+ * Open-Meteo для модели era5_land не отдаёт солнечную радиацию, ветер,
+ * осадки и давление — только температуру и точку росы. Подстановка значений
+ * по умолчанию превратила явный сбой в тихий: расчёт выдал правдоподобную
+ * таблицу с испарением 483 мм/год вместо ожидаемых ~1200. Радиационный баланс
+ * при этом был отрицательным круглый год, а температура воды не поднималась
+ * выше 17 °C.
+ *
+ * Вывод, закреплённый здесь: для радиации и ветра значения по умолчанию
+ * недопустимы. Отсутствие данных обязано быть ошибкой, а не нулём.
+ */
+function mockTwoModels({ landHasAll = false } = {}) {
+  globalThis.fetch = async (url) => {
+    const isLand = String(url).includes('era5_land');
+    const h = hourlyMock({});
+    if (isLand && !landHasAll) {
+      // era5_land отдаёт только температуру, точку росы и осадки
+      for (const v of ['shortwave_radiation', 'wind_speed_10m',
+                       'surface_pressure', 'cloud_cover']) {
+        h[v] = h[v].map(() => null);
+      }
+    }
+    return { ok: true, status: 200, json: async () => ({ hourly: h }) };
+  };
+}
+
+mockTwoModels();
+try {
+  const met = await meteo.fetchArchive(41.13, 68.16, 2021, 2023, null, () => {});
+  const annual = aggregateAnnual(computeEvaporation(met, 10, 365));
+  const plausible = annual.length >= 1 && annual.every(a => a.E > 600);
+  check(plausible, 'era5_land без радиации — era5 подхватывает',
+        `E=${annual.map(a => a.E).join(',')}`);
+} catch (e) {
+  check(false, 'era5_land без радиации — era5 подхватывает', e.message);
+}
+
+// радиации нет ни в одной модели — обязан быть отказ
+globalThis.fetch = async () => ({
+  ok: true, status: 200,
+  json: async () => ({ hourly: hourlyWithNulls(['shortwave_radiation']) }),
+});
+try {
+  await meteo.fetchArchive(41.13, 68.16, 2021, 2023, null, () => {});
+  check(false, 'нет радиации нигде', 'посчитал вместо отказа');
+} catch (e) {
+  check(true, 'нет радиации нигде', `"${e.message.slice(0, 50)}…"`);
+}
+
+// ветра нет нигде
+globalThis.fetch = async () => ({
+  ok: true, status: 200,
+  json: async () => ({ hourly: hourlyWithNulls(['wind_speed_10m']) }),
+});
+try {
+  await meteo.fetchArchive(41.13, 68.16, 2021, 2023, null, () => {});
+  check(false, 'нет ветра нигде', 'посчитал вместо отказа');
+} catch (e) {
+  check(true, 'нет ветра нигде', `"${e.message.slice(0, 50)}…"`);
 }
 
 console.log(failures ? `\n${failures} проверок провалено` : '\nвсе проверки пройдены');

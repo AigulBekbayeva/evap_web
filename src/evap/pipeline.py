@@ -48,7 +48,7 @@ def build_dataset(cfg) -> pd.DataFrame:
     # ---------- метеорология ----------
     print("Выгружаю ERA5 через Open-Meteo…")
     met = om_mod.fetch_archive(info["centroid_lat"], info["centroid_lon"],
-                               cfg.start, cfg.end[:10], model=cfg.era5_model)
+                               cfg.start, cfg.end[:10])
 
     for w in om_mod.sanity_check(met):
         print(f"  ! {w}")

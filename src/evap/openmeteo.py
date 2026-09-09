@@ -41,17 +41,31 @@ HOURLY_VARS = [
     "precipitation",
 ]
 
+# Переменные, без которых расчёт бессмысленен: радиация и ветер — это оба
+# слагаемых Пенмана, радиационное и адвективное. Подставлять вместо них
+# значения по умолчанию нельзя — расчёт пройдёт и будет неверен втрое.
+ESSENTIAL_VARS = ["temperature_2m", "dew_point_2m",
+                  "shortwave_radiation", "wind_speed_10m"]
+
+# Open-Meteo Archive: era5_land (9 км) содержит только приземные метеополя.
+# Радиации, ветра и давления в нём НЕТ — они есть лишь в era5 (31 км).
+# Поэтому базовый запрос идёт к era5, а era5_land накладывается сверху там,
+# где даёт лучшее разрешение.
+BASE_MODEL = "era5"
+REFINE_MODEL = "era5_land"
+REFINE_VARS = ["temperature_2m", "dew_point_2m", "precipitation"]
+
 
 def fetch_archive(lat: float, lon: float, start: str, end: str,
-                  model: str = "era5_land",
+                  model: str | None = None,
                   chunk_years: int = 5,
                   pause_s: float = 1.0) -> pd.DataFrame:
     """
     Забирает почасовой ряд ERA5 и агрегирует до суток.
 
-    model: 'era5_land' (9 км, рекомендуется) или 'era5' (31 км).
-    Разбивка на чанки — вежливость к бесплатному API, а не техническая
-    необходимость: за 25 лет это 219 000 значений на переменную.
+    Базовый запрос идёт к era5 (полный набор переменных), затем температура и
+    осадки уточняются из era5_land, где разрешение втрое лучше. Параметр
+    model оставлен для совместимости: если задан явно, используется только он.
     """
     import requests
 
@@ -65,33 +79,108 @@ def fetch_archive(lat: float, lon: float, start: str, end: str,
         if s > e:
             continue
 
-        print(f"  Open-Meteo ({model}): {s} … {e}")
+        base_model = model or BASE_MODEL
+        print(f"  Open-Meteo ({base_model}): {s} … {e}")
+        base = _request_hourly(lat, lon, s, e, base_model, HOURLY_VARS)
 
-        params = {
-            "latitude": lat, "longitude": lon,
-            "start_date": s, "end_date": e,
-            "hourly": ",".join(HOURLY_VARS),
-            "models": model,
-            "timezone": "UTC",
-        }
-        r = requests.get(ARCHIVE_URL, params=params, timeout=180)
+        if base is None:
+            raise RuntimeError(
+                f"Open-Meteo не вернул пригодных данных за {s} … {e}")
 
-        if r.status_code == 400 and model == "era5_land":
-            print("    era5_land недоступен для этой точки, перехожу на era5")
-            return fetch_archive(lat, lon, start, end, model="era5",
-                                 chunk_years=chunk_years, pause_s=pause_s)
-        r.raise_for_status()
+        if model is None:
+            try:
+                fine = _request_hourly(lat, lon, s, e, REFINE_MODEL, REFINE_VARS)
+                if fine is not None and len(fine) == len(base):
+                    for v in REFINE_VARS:
+                        if v in fine and fine[v].notna().any():
+                            base[v] = fine[v].to_numpy()
+            except Exception:
+                pass    # уточнение необязательно
 
-        h = pd.DataFrame(r.json()["hourly"])
-        h["time"] = pd.to_datetime(h["time"])
-        frames.append(h)
+        frames.append(base)
         time.sleep(pause_s)
 
     if not frames:
         raise RuntimeError("Open-Meteo не вернул данных — проверьте координаты и даты")
 
     hourly = pd.concat(frames, ignore_index=True).drop_duplicates(subset="time")
-    return _aggregate_daily(hourly)
+    daily = _aggregate_daily(hourly)
+    _validate_essentials(daily)
+    return daily
+
+
+def _request_hourly(lat, lon, start, end, model, variables):
+    """Один запрос к Archive API. None, если ключевых переменных нет."""
+    import requests
+
+    params = {
+        "latitude": lat, "longitude": lon,
+        "start_date": start, "end_date": end,
+        "hourly": ",".join(variables),
+        "models": model,
+        "timezone": "UTC",
+    }
+    r = requests.get(ARCHIVE_URL, params=params, timeout=180)
+    if not r.ok:
+        reason = r.text[:200]
+        try:
+            reason = r.json().get("reason", reason)
+        except Exception:
+            pass
+        raise RuntimeError(f"Open-Meteo отклонил запрос ({model}): {reason}")
+
+    hourly = r.json().get("hourly")
+    if not hourly or "time" not in hourly:
+        return None
+
+    # API может добавлять суффикс модели к именам полей
+    df = pd.DataFrame({"time": pd.to_datetime(hourly["time"])})
+    for v in variables:
+        col = None
+        for cand in (v, f"{v}_{model}"):
+            if cand in hourly:
+                col = cand
+                break
+        if col is None:
+            col = next((k for k in hourly if k.startswith(v)), None)
+        df[v] = hourly[col] if col else np.nan
+
+    for v in variables:
+        if v in ESSENTIAL_VARS and df[v].isna().all():
+            return None
+    return df
+
+
+def _validate_essentials(daily: pd.DataFrame) -> None:
+    """
+    Ключевые переменные обязаны СОДЕРЖАТЬ СИГНАЛ, а не просто присутствовать.
+
+    Нулевая радиация или постоянный ветер выглядят как нормальные числа и
+    проходят любую проверку на конечность. Но радиация, равная нулю круглый
+    год, — это не «мало солнца», а отсутствующие данные, и расчёт по ним
+    занижает испарение втрое.
+    """
+    problems = []
+
+    rs_per_year = daily["rs_down"].mean() * 365
+    if rs_per_year < 1000:
+        problems.append(
+            f"солнечная радиация {rs_per_year:.0f} МДж/м²/год "
+            "(норма 3000–7000) — данных фактически нет")
+
+    if daily["u10"].round(3).nunique() <= 2:
+        problems.append("скорость ветра постоянна — данных нет")
+
+    if daily["ta"].max() - daily["ta"].min() < 5:
+        problems.append(f"размах температуры всего "
+                        f"{daily['ta'].max() - daily['ta'].min():.1f} °C")
+
+    if problems:
+        raise RuntimeError(
+            "Полученные данные непригодны для расчёта: "
+            + "; ".join(problems)
+            + ". Возможно, Open-Meteo временно недоступен или для этой точки "
+              "нет покрытия.")
 
 
 def _aggregate_daily(h: pd.DataFrame) -> pd.DataFrame:

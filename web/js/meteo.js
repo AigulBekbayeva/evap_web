@@ -28,6 +28,30 @@ const HOURLY_VARS = [
 ];
 
 /**
+ * Переменные, без которых расчёт бессмысленен.
+ *
+ * Радиация и ветер — это оба слагаемых формулы Пенмана: радиационное и
+ * адвективное. Подставлять вместо них значения по умолчанию НЕЛЬЗЯ: расчёт
+ * пройдёт, выдаст правдоподобные числа и будет неверен втрое. Именно так и
+ * случилось, когда защита от недостающих полей молча подставляла нули.
+ */
+const ESSENTIAL_VARS = [
+  'temperature_2m', 'dew_point_2m', 'shortwave_radiation', 'wind_speed_10m',
+];
+
+/**
+ * Что реально отдаёт Open-Meteo Archive по моделям.
+ *
+ * era5_land (9 км) содержит только приземные метеополя — температуру, точку
+ * росы, осадки. Радиации, ветра и давления в нём НЕТ: они есть лишь в era5
+ * (31 км). Поэтому базовый запрос идёт к era5, а era5_land накладывается
+ * сверху там, где даёт лучшее разрешение.
+ */
+const BASE_MODEL = 'era5';
+const REFINE_MODEL = 'era5_land';
+const REFINE_VARS = ['temperature_2m', 'dew_point_2m', 'precipitation'];
+
+/**
  * Забирает почасовой ряд ERA5 и агрегирует до суток.
  *
  * Разбивка на чанки — вежливость к бесплатному API и способ показать прогресс:
@@ -36,8 +60,7 @@ const HOURLY_VARS = [
  * @param {function} onProgress вызывается как (доля, текст)
  */
 export async function fetchArchive(lat, lon, startYear, endYear,
-                                   model = 'era5_land',
-                                   onProgress = () => {}) {
+                                   model = null, onProgress = () => {}) {
   const CHUNK = 5;
   const chunks = [];
   for (let y = startYear; y <= endYear; y += CHUNK) {
@@ -45,57 +68,116 @@ export async function fetchArchive(lat, lon, startYear, endYear,
   }
 
   const all = [];
-  for (let i = 0; i < chunks.length; i++) {
-    const [y0, y1] = chunks[i];
-    onProgress(i / chunks.length, `Загрузка ${y0}–${y1}…`);
+  const steps = chunks.length * 2;
+  let step = 0;
 
-    const params = new URLSearchParams({
-      latitude: lat.toFixed(4),
-      longitude: lon.toFixed(4),
-      start_date: `${y0}-01-01`,
-      end_date: `${y1}-12-31`,
-      hourly: HOURLY_VARS.join(','),
-      models: model,
-      timezone: 'UTC',
-    });
+  for (const [y0, y1] of chunks) {
+    onProgress(step++ / steps, `Загрузка ${y0}–${y1}…`);
 
-    let resp;
+    // Базовый запрос: era5 содержит полный набор переменных
+    const base = await requestHourly(lat, lon, y0, y1, BASE_MODEL, HOURLY_VARS);
+    if (!base) {
+      throw new Error(
+        `Open-Meteo не вернул данных за ${y0}–${y1}. ` +
+        'Проверьте координаты и период.');
+    }
+
+    // Уточнение: era5_land даёт температуру с 9 км вместо 31 км.
+    // Не критично — при неудаче просто остаёмся на era5.
+    onProgress(step++ / steps, `Уточнение ${y0}–${y1}…`);
     try {
-      resp = await fetch(`${ARCHIVE_URL}?${params}`);
-    } catch (e) {
-      throw new Error(
-        'Не удалось связаться с Open-Meteo. Проверьте интернет-соединение ' +
-        'или блокировщик запросов.');
-    }
-
-    if (!resp.ok) {
-      if (resp.status === 400 && model === 'era5_land') {
-        // ERA5-Land покрывает не всю поверхность (нет над океаном и частью
-        // высокогорий) — откатываемся на ERA5 31 км
-        onProgress(0, 'ERA5-Land недоступен здесь, перехожу на ERA5…');
-        return fetchArchive(lat, lon, startYear, endYear, 'era5', onProgress);
+      const fine = await requestHourly(lat, lon, y0, y1, REFINE_MODEL,
+                                       REFINE_VARS);
+      if (fine && fine.time.length === base.time.length) {
+        for (const v of REFINE_VARS) {
+          if (Array.isArray(fine[v]) && fine[v].some(x => x !== null)) {
+            base[v] = fine[v];
+          }
+        }
+        base.refined = true;
       }
-      let reason = `${resp.status}`;
-      try {
-        const j = await resp.json();
-        if (j.reason) reason = j.reason;
-      } catch { /* тело не JSON — оставляем код статуса */ }
-      throw new Error(`Open-Meteo отклонил запрос: ${reason}`);
-    }
+    } catch { /* уточнение необязательно */ }
 
-    const json = await resp.json();
-    const hourly = normaliseHourly(json.hourly, model);
-
-    if (!hourly) {
-      throw new Error(
-        `Open-Meteo вернул ответ без ожидаемых полей за ${y0}–${y1}. ` +
-        'Возможно, для этой точки нет данных выбранной модели.');
-    }
-    all.push(hourly);
+    all.push(base);
   }
 
   onProgress(0.95, 'Агрегация до суток…');
-  return aggregateDaily(all, model);
+  const daily = aggregateDaily(all, BASE_MODEL);
+  validateEssentials(daily);
+  return daily;
+}
+
+/** Один запрос к Archive API. Возвращает нормализованный hourly или null. */
+async function requestHourly(lat, lon, y0, y1, model, vars) {
+  const params = new URLSearchParams({
+    latitude: lat.toFixed(4),
+    longitude: lon.toFixed(4),
+    start_date: `${y0}-01-01`,
+    end_date: `${y1}-12-31`,
+    hourly: vars.join(','),
+    models: model,
+    timezone: 'UTC',
+  });
+
+  let resp;
+  try {
+    resp = await fetch(`${ARCHIVE_URL}?${params}`);
+  } catch {
+    throw new Error(
+      'Не удалось связаться с Open-Meteo. Проверьте интернет-соединение ' +
+      'или блокировщик запросов.');
+  }
+
+  if (!resp.ok) {
+    let reason = `${resp.status}`;
+    try {
+      const j = await resp.json();
+      if (j.reason) reason = j.reason;
+    } catch { /* тело не JSON */ }
+    throw new Error(`Open-Meteo отклонил запрос (${model}): ${reason}`);
+  }
+
+  const json = await resp.json();
+  return normaliseHourly(json.hourly, model, vars);
+}
+
+/**
+ * Последний рубеж перед расчётом: ключевые переменные обязаны СОДЕРЖАТЬ
+ * СИГНАЛ, а не просто присутствовать.
+ *
+ * Нулевая солнечная радиация или постоянный ветер выглядят как нормальные
+ * числа и проходят любую проверку на конечность. Но радиация, равная нулю
+ * круглый год, — это не «мало солнца», это отсутствующие данные, и расчёт
+ * по ним занижает испарение втрое.
+ */
+function validateEssentials(daily) {
+  const problems = [];
+
+  const rsTotal = daily.reduce((s, d) => s + d.rsDown, 0);
+  const rsPerYear = (rsTotal / daily.length) * 365;
+  if (rsPerYear < 1000) {
+    problems.push(
+      `солнечная радиация ${rsPerYear.toFixed(0)} МДж/м²/год ` +
+      '(норма 3000–7000) — данных фактически нет');
+  }
+
+  const winds = new Set(daily.map(d => Math.round(d.u10 * 100)));
+  if (winds.size <= 2) {
+    problems.push('скорость ветра постоянна — данных нет');
+  }
+
+  const taRange = Math.max(...daily.map(d => d.ta))
+                - Math.min(...daily.map(d => d.ta));
+  if (taRange < 5) {
+    problems.push(`размах температуры всего ${taRange.toFixed(1)} °C`);
+  }
+
+  if (problems.length) {
+    throw new Error(
+      'Полученные данные непригодны для расчёта: ' + problems.join('; ') +
+      '. Возможно, Open-Meteo временно недоступен или для этой точки нет ' +
+      'покрытия. Повторите позже.');
+  }
 }
 
 /**
@@ -108,13 +190,13 @@ export async function fetchArchive(lat, lon, startYear, endYear,
  *
  * Возвращает null, если обязательных полей нет вовсе.
  */
-function normaliseHourly(hourly, model) {
+function normaliseHourly(hourly, model, vars = HOURLY_VARS) {
   if (!hourly || !Array.isArray(hourly.time)) return null;
 
   const out = { time: hourly.time };
   const suffix = `_${model}`;
 
-  for (const v of HOURLY_VARS) {
+  for (const v of vars) {
     if (Array.isArray(hourly[v])) {
       out[v] = hourly[v];
     } else if (Array.isArray(hourly[v + suffix])) {
@@ -127,9 +209,11 @@ function normaliseHourly(hourly, model) {
     }
   }
 
-  // без температуры и точки росы считать нечего; облачность и осадки
-  // можно пережить
-  if (!out.temperature_2m || !out.dew_point_2m) return null;
+  // проверяем только те переменные, которые запрашивали
+  const essential = vars.filter(v => ESSENTIAL_VARS.includes(v));
+  for (const v of essential) {
+    if (!out[v] || !out[v].some(x => x !== null && x !== undefined)) return null;
+  }
   return out;
 }
 
@@ -181,7 +265,10 @@ function aggregateDaily(chunks, model) {
     const tdew = mean(d.tdew);
     const cloud = d.cc.length ? mean(d.cc) : 50;
     const pKpa = d.p.length ? mean(d.p) / 10.0 : 101.3;   // гПа → кПа
-    const u10 = d.u.length ? mean(d.u) / 3.6 : 2.0;       // км/ч → м/с
+    // Ветер по умолчанию НЕ подставляется: он входит в адвективный член
+    // Пенмана, и константа вместо него занижает результат, не сообщая об этом.
+    // Отсутствие ветра ловится в validateEssentials.
+    const u10 = d.u.length ? mean(d.u) / 3.6 : NaN;       // км/ч → м/с
 
     const rec = {
       date,
